@@ -72,6 +72,11 @@ zero_opts = ["No", "Yes"]
 exclude_zero_choice = st.selectbox("Exclude 0 enrollment courses?", zero_opts, index=0)
 exclude_zero_enrollment = (exclude_zero_choice == "Yes")
 
+# Verify config DEPT loading
+with st.expander("View Department IDs"):
+    st.markdown("List loaded from config.json")
+    st.json(SCHOOL_DEPT_IDS)
+
 st.markdown("---")
 generate = st.button("Generate Master Excel", type="primary")
 
@@ -136,4 +141,5 @@ if generate:
                 os.unlink(out_path)
             except Exception:
                 pass
+
 
