@@ -2,33 +2,16 @@
 from pathlib import Path
 import tempfile
 import os
+import json
 
 import streamlit as st
 
 from monthly_master_report import build_monthly_master_report
 
-
-# ---------------------- SCHOOL → DEPT IDs ----------------------
-SCHOOL_DEPT_IDS = {
-    "Agrilife": ["568","569","570","571","572","573","574","575","576","577","578","579","580","581","582","583","805"],
-    "Architecture": ["562","563","564","565","807"],
-    "Arts Sciences": ["586","587","588","589","590","591","592","593","594","595","596","597","598","599","600","601","602","603","604","806"],
-    "Bush School": ["644","645","646","647"],
-    "CEHD": ["625","626","627","628","815"],
-    "Dentistry": ["613","614","615","616","617","618","619","620","621","622","813"],
-    "Engineering": ["551","629","630","631","632","633","634","635","636","637","638","639","640","641","642"],
-    "Law": ["691"],
-    "Marine Sciences": ["229","230","237","240","241","242","244","248","249","402","417","524","527"],
-    "Mays School of Business": ["605","606","607","608","609","610"],
-    "Medicine": ["546","550"],
-    "Military Science": ["670","671","672","673"],
-    "Nursing": ["675","680"],
-    "Pharmacy": ["688","689"],
-    "Public Health": ["681","682","683","684","685","686","814","818"],
-    "PVFA": ["693"],
-    "Qatar": ["343","344","345","346","702"],
-    "Vet Med": ["695","696","697","698","699","700"],
-}
+# Load dept id config file
+with open("config.json", "r") as config_file:
+    config_data = json.load(config_file)
+    SCHOOL_DEPT_IDS = config_data["SCHOOL_DEPT_IDS"]
 
 
 def save_uploaded_file(uploaded_file) -> Path:
@@ -153,3 +136,4 @@ if generate:
                 os.unlink(out_path)
             except Exception:
                 pass
+
