@@ -92,7 +92,7 @@ def validate_report_month(report_month: str) -> str:
 
 def _clean_dept_id_series(s: pd.Series) -> pd.Series:
     # Handles numeric dept ids stored as floats like 551.0
-    return s.astype(str).str.strip().str.replace(".0", "", regex=False)
+    return pd.to_numeric(s, errors='coerce').astype('Int64').astype(str)
 
 
 def _coerce_students(series: pd.Series) -> pd.Series:
@@ -481,3 +481,4 @@ if __name__ == "__main__":
         reset_to_year=args.reset_year,
         exclude_zero_enrollment=args.exclude_zero,
     )
+
