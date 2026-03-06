@@ -132,14 +132,12 @@ if generate:
 
     finally:
         for p in tmp_paths:
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+            p.unlink(missing_ok=True)
         if out_path is not None:
             try:
                 os.unlink(out_path)
             except Exception:
                 pass
+
 
 
