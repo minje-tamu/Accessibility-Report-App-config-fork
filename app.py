@@ -48,7 +48,7 @@ report_month = st.text_input("Report month (YYYY-MM)", value="2026-02")
 
 keep_only_prev = st.checkbox(
     "Keep only courses from previous master (recommended for your workflow)",
-    value=True,
+    value=False,
 )
 
 reset_year = st.text_input(
