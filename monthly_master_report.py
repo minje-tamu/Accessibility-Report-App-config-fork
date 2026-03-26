@@ -5,6 +5,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import numpy as np
 
 import pandas as pd
 
@@ -166,7 +167,7 @@ def build_monthly_master_report(
     keep_only_prev_courses: bool = True,
     reset_to_year: str | None = None,
     exclude_zero_enrollment: bool = False,
-    college_name: str = "All Colleges", # New parameter for the Dean layout
+    college_name: str = "All Colleges",
 ) -> None:
     
     report_month = validate_report_month(report_month)
@@ -233,54 +234,58 @@ def build_monthly_master_report(
     merged = merged[[c for c in base_cols if c in merged.columns] + month_cols + other_cols]
 
     # ==========================================
-    # GENERATE DEAN SUMMARY SHEET
+    # GENERATE DEAN SUMMARY SHEET (CUMULATIVE/WEIGHTED)
     # ==========================================
     student_counts = _coerce_students(merged["Number of students"]).fillna(0)
-    ally_series = pd.to_numeric(merged[ally_col], errors="coerce")
-    pan_series = pd.to_numeric(merged[pan_col], errors="coerce")
+    
+    ally_series = pd.to_numeric(merged[ally_col], errors="coerce").fillna(0)
+    pan_series = pd.to_numeric(merged[pan_col], errors="coerce").fillna(0)
     
     summary_df = merged.copy()
-    summary_df["_ally_num"] = ally_series
-    summary_df["_pan_num"] = pan_series
     summary_df["_students_num"] = student_counts
+    summary_df["_ally_weight"] = ally_series * student_counts
+    summary_df["_pan_weight"] = pan_series * student_counts
     summary_df["Department name"] = summary_df["Department name"].fillna("Unknown")
     
     summary = summary_df.groupby("Department name").agg(
-        Ally_Score=("_ally_num", "mean"),
-        Panorama_Score=("_pan_num", "mean"),
+        Sum_Ally_Weight=("_ally_weight", "sum"),
+        Sum_Pan_Weight=("_pan_weight", "sum"),
         Total_Students=("_students_num", "sum"),
         Total_Courses=("course_id", "count")
     ).reset_index()
     
+    summary["Cumulative Ally Score"] = np.where(summary["Total_Students"] > 0, summary["Sum_Ally_Weight"] / summary["Total_Students"], 0)
+    summary["Cumulative Panorama Score"] = np.where(summary["Total_Students"] > 0, summary["Sum_Pan_Weight"] / summary["Total_Students"], 0)
+    summary["Difference in Scores"] = summary["Cumulative Panorama Score"] - summary["Cumulative Ally Score"]
+    
     summary.rename(columns={
         "Department name": "Department",
-        "Ally_Score": "Ally Score",
-        "Panorama_Score": "Panorama Score",
         "Total_Students": "Total Number of Students",
         "Total_Courses": "Total Number of Courses"
     }, inplace=True)
     
-    summary["Difference in Scores"] = summary["Panorama Score"] - summary["Ally Score"]
-    
-    overall_ally = summary_df["_ally_num"].mean()
-    overall_pan = summary_df["_pan_num"].mean()
     overall_students = summary_df["_students_num"].sum()
     overall_courses = len(summary_df)
-    overall_diff = overall_pan - overall_ally if pd.notnull(overall_pan) and pd.notnull(overall_ally) else pd.NA
+    
+    overall_ally_cum = summary_df["_ally_weight"].sum() / overall_students if overall_students > 0 else 0
+    overall_pan_cum = summary_df["_pan_weight"].sum() / overall_students if overall_students > 0 else 0
+    overall_diff = overall_pan_cum - overall_ally_cum
     
     overall_row = pd.DataFrame([{
         "Department": "Overall",
-        "Ally Score": overall_ally,
-        "Panorama Score": overall_pan,
+        "Cumulative Ally Score": overall_ally_cum,
+        "Cumulative Panorama Score": overall_pan_cum,
         "Total Number of Students": overall_students,
         "Total Number of Courses": overall_courses,
         "Difference in Scores": overall_diff
     }])
     
+    final_cols = ["Department", "Cumulative Ally Score", "Cumulative Panorama Score", "Total Number of Students", "Total Number of Courses", "Difference in Scores"]
+    summary = summary[final_cols]
+    
     summary = pd.concat([overall_row, summary], ignore_index=True)
     
-    # Divide by 100 so Excel natively formats them as percentages (e.g. 85%)
-    for col in ["Ally Score", "Panorama Score", "Difference in Scores"]:
+    for col in ["Cumulative Ally Score", "Cumulative Panorama Score", "Difference in Scores"]:
         summary[col] = summary[col] / 100.0
 
     # ==========================================
@@ -304,7 +309,7 @@ def build_monthly_master_report(
         percent_bold_fmt = wb.add_format({'bold': True, 'num_format': '0%'})
         
         ws_summary.set_column(0, 0, 35) # Department
-        ws_summary.set_column(1, 2, 22, percent_fmt) # Scores
+        ws_summary.set_column(1, 2, 25, percent_fmt) # Scores
         ws_summary.set_column(3, 4, 22) # Totals
         ws_summary.set_column(5, 5, 20, percent_fmt) # Difference
 
@@ -314,8 +319,8 @@ def build_monthly_master_report(
 
         # Bold the Overall row (Row 22)
         ws_summary.write(21, 0, summary.iloc[0]["Department"], bold_fmt)
-        ws_summary.write_number(21, 1, summary.iloc[0]["Ally Score"], percent_bold_fmt)
-        ws_summary.write_number(21, 2, summary.iloc[0]["Panorama Score"], percent_bold_fmt)
+        ws_summary.write_number(21, 1, summary.iloc[0]["Cumulative Ally Score"], percent_bold_fmt)
+        ws_summary.write_number(21, 2, summary.iloc[0]["Cumulative Panorama Score"], percent_bold_fmt)
         ws_summary.write_number(21, 3, summary.iloc[0]["Total Number of Students"], bold_fmt)
         ws_summary.write_number(21, 4, summary.iloc[0]["Total Number of Courses"], bold_fmt)
         ws_summary.write_number(21, 5, summary.iloc[0]["Difference in Scores"], percent_bold_fmt)
@@ -329,32 +334,6 @@ def build_monthly_master_report(
         
         ws_summary.write(3, 1, "0 Enrolled Courses Excluded:", bold_fmt)
         ws_summary.write(3, 2, "Yes" if exclude_zero_enrollment else "No")
-
-        # --- Dashboard Visuals (Doughnut Charts) ---
-        # Write hidden remainders needed for doughnut gauge charts
-        ws_summary.write_formula('H22', '=IF(B22="","",1-B22)')
-        ws_summary.write_formula('I22', '=IF(C22="","",1-C22)')
-        ws_summary.set_column('H:I', None, None, {'hidden': True})
-
-        chart_ally = wb.add_chart({'type': 'doughnut'})
-        chart_ally.add_series({
-            'name': 'Ally Overall',
-            'values': '=(Summary!$B$22,Summary!$H$22)',
-            'points': [{'fill': {'color': '#C6EFCE'}}, {'fill': {'color': '#F2F2F2'}}]
-        })
-        chart_ally.set_hole_size(60)
-        chart_ally.set_title({'name': 'Overall Ally Score'})
-        ws_summary.insert_chart('B6', chart_ally, {'x_scale': 0.8, 'y_scale': 0.8})
-
-        chart_pan = wb.add_chart({'type': 'doughnut'})
-        chart_pan.add_series({
-            'name': 'Panorama Overall',
-            'values': '=(Summary!$C$22,Summary!$I$22)',
-            'points': [{'fill': {'color': '#C6EFCE'}}, {'fill': {'color': '#F2F2F2'}}]
-        })
-        chart_pan.set_hole_size(60)
-        chart_pan.set_title({'name': 'Overall Panorama Score'})
-        ws_summary.insert_chart('D6', chart_pan, {'x_scale': 0.8, 'y_scale': 0.8})
 
         # --- Formatting: Courses Sheet ---
         ws_courses.freeze_panes(1, 0)
@@ -383,7 +362,6 @@ def build_monthly_master_report(
 
     print(f"Wrote monthly master report to {output_path}")
 
-# ... CLI block remains untouched ...
 if __name__ == "__main__":
     args = parse_args()
 
