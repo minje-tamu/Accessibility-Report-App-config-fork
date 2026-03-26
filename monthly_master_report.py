@@ -87,6 +87,20 @@ def _coerce_students(series: pd.Series) -> pd.Series:
     s = s.str.replace(".0", "", regex=False)
     return pd.to_numeric(s, errors="coerce")
 
+def format_month_header(col_name: str) -> str:
+    """Converts 'Ally 2026-02' to 'February Ally Score'"""
+    if not col_name:
+        return ""
+    parts = col_name.split(" ", 1)
+    if len(parts) == 2:
+        try:
+            dt = datetime.strptime(parts[1], "%Y-%m")
+            month_str = dt.strftime("%B")
+            return f"{month_str} {parts[0]} Score"
+        except Exception:
+            pass
+    return col_name
+
 
 # ---------------------- snapshot prep (current month only) ----------------------
 def prepare_month_snapshot(
@@ -234,59 +248,85 @@ def build_monthly_master_report(
     merged = merged[[c for c in base_cols if c in merged.columns] + month_cols + other_cols]
 
     # ==========================================
-    # GENERATE DEAN SUMMARY SHEET (CUMULATIVE/WEIGHTED)
+    # GENERATE DEAN SUMMARY SHEET (PREV VS CURRENT)
     # ==========================================
+    ally_cols_sorted = sorted([c for c in merged.columns if c.startswith("Ally ")])
+    pan_cols_sorted = sorted([c for c in merged.columns if c.startswith("Panorama ")])
+
+    curr_ally_col = ally_cols_sorted[-1] if ally_cols_sorted else None
+    prev_ally_col = ally_cols_sorted[-2] if len(ally_cols_sorted) > 1 else None
+    
+    curr_pan_col = pan_cols_sorted[-1] if pan_cols_sorted else None
+    prev_pan_col = pan_cols_sorted[-2] if len(pan_cols_sorted) > 1 else None
+
     student_counts = _coerce_students(merged["Number of students"]).fillna(0)
-    
-    ally_series = pd.to_numeric(merged[ally_col], errors="coerce").fillna(0)
-    pan_series = pd.to_numeric(merged[pan_col], errors="coerce").fillna(0)
-    
     summary_df = merged.copy()
     summary_df["_students_num"] = student_counts
-    summary_df["_ally_weight"] = ally_series * student_counts
-    summary_df["_pan_weight"] = pan_series * student_counts
     summary_df["Department name"] = summary_df["Department name"].fillna("Unknown")
     
+    # Weights for Ally
+    summary_df["_a_curr_w"] = (pd.to_numeric(summary_df[curr_ally_col], errors="coerce").fillna(0) * student_counts) if curr_ally_col else 0
+    summary_df["_a_prev_w"] = (pd.to_numeric(summary_df[prev_ally_col], errors="coerce").fillna(0) * student_counts) if prev_ally_col else 0
+    
+    # Weights for Panorama
+    summary_df["_p_curr_w"] = (pd.to_numeric(summary_df[curr_pan_col], errors="coerce").fillna(0) * student_counts) if curr_pan_col else 0
+    summary_df["_p_prev_w"] = (pd.to_numeric(summary_df[prev_pan_col], errors="coerce").fillna(0) * student_counts) if prev_pan_col else 0
+    
     summary = summary_df.groupby("Department name").agg(
-        Sum_Ally_Weight=("_ally_weight", "sum"),
-        Sum_Pan_Weight=("_pan_weight", "sum"),
         Total_Students=("_students_num", "sum"),
-        Total_Courses=("course_id", "count")
+        Total_Courses=("course_id", "count"),
+        A_Curr_W=("_a_curr_w", "sum"),
+        A_Prev_W=("_a_prev_w", "sum"),
+        P_Curr_W=("_p_curr_w", "sum"),
+        P_Prev_W=("_p_prev_w", "sum")
     ).reset_index()
     
-    summary["Cumulative Ally Score"] = np.where(summary["Total_Students"] > 0, summary["Sum_Ally_Weight"] / summary["Total_Students"], 0)
-    summary["Cumulative Panorama Score"] = np.where(summary["Total_Students"] > 0, summary["Sum_Pan_Weight"] / summary["Total_Students"], 0)
-    summary["Difference in Scores"] = summary["Cumulative Panorama Score"] - summary["Cumulative Ally Score"]
-    
-    summary.rename(columns={
-        "Department name": "Department",
-        "Total_Students": "Total Number of Students",
-        "Total_Courses": "Total Number of Courses"
-    }, inplace=True)
-    
+    # Calculate Cumulative Scores
+    summary["A_Curr_Score"] = np.where(summary["Total_Students"] > 0, summary["A_Curr_W"] / summary["Total_Students"], pd.NA)
+    summary["A_Prev_Score"] = np.where(summary["Total_Students"] > 0, summary["A_Prev_W"] / summary["Total_Students"], pd.NA)
+    summary["P_Curr_Score"] = np.where(summary["Total_Students"] > 0, summary["P_Curr_W"] / summary["Total_Students"], pd.NA)
+    summary["P_Prev_Score"] = np.where(summary["Total_Students"] > 0, summary["P_Prev_W"] / summary["Total_Students"], pd.NA)
+
+    # Calculate Differences
+    summary["Diff_Ally"] = summary["A_Curr_Score"] - summary["A_Prev_Score"]
+    summary["Diff_Pan"] = summary["P_Curr_Score"] - summary["P_Prev_Score"]
+
+    # Calculate Overall Grand Totals
     overall_students = summary_df["_students_num"].sum()
-    overall_courses = len(summary_df)
-    
-    overall_ally_cum = summary_df["_ally_weight"].sum() / overall_students if overall_students > 0 else 0
-    overall_pan_cum = summary_df["_pan_weight"].sum() / overall_students if overall_students > 0 else 0
-    overall_diff = overall_pan_cum - overall_ally_cum
-    
-    overall_row = pd.DataFrame([{
-        "Department": "Overall",
-        "Cumulative Ally Score": overall_ally_cum,
-        "Cumulative Panorama Score": overall_pan_cum,
-        "Total Number of Students": overall_students,
-        "Total Number of Courses": overall_courses,
-        "Difference in Scores": overall_diff
-    }])
-    
-    final_cols = ["Department", "Cumulative Ally Score", "Cumulative Panorama Score", "Total Number of Students", "Total Number of Courses", "Difference in Scores"]
-    summary = summary[final_cols]
-    
+    overall_row_data = {
+        "Department name": "Overall",
+        "Total_Students": overall_students,
+        "Total_Courses": len(summary_df),
+        "A_Curr_Score": summary_df["_a_curr_w"].sum() / overall_students if overall_students > 0 else pd.NA,
+        "A_Prev_Score": summary_df["_a_prev_w"].sum() / overall_students if overall_students > 0 else pd.NA,
+        "P_Curr_Score": summary_df["_p_curr_w"].sum() / overall_students if overall_students > 0 else pd.NA,
+        "P_Prev_Score": summary_df["_p_prev_w"].sum() / overall_students if overall_students > 0 else pd.NA,
+    }
+    overall_row_data["Diff_Ally"] = overall_row_data["A_Curr_Score"] - overall_row_data["A_Prev_Score"] if pd.notna(overall_row_data["A_Curr_Score"]) and pd.notna(overall_row_data["A_Prev_Score"]) else pd.NA
+    overall_row_data["Diff_Pan"] = overall_row_data["P_Curr_Score"] - overall_row_data["P_Prev_Score"] if pd.notna(overall_row_data["P_Curr_Score"]) and pd.notna(overall_row_data["P_Prev_Score"]) else pd.NA
+
+    overall_row = pd.DataFrame([overall_row_data])
     summary = pd.concat([overall_row, summary], ignore_index=True)
+
+    # Build the final column layout dynamically based on available data
+    final_cols_map = {"Department name": "Department"}
+    if prev_ally_col: final_cols_map["A_Prev_Score"] = format_month_header(prev_ally_col)
+    if curr_ally_col: final_cols_map["A_Curr_Score"] = format_month_header(curr_ally_col)
+    if prev_ally_col and curr_ally_col: final_cols_map["Diff_Ally"] = "Difference in Scores (Ally)"
     
-    for col in ["Cumulative Ally Score", "Cumulative Panorama Score", "Difference in Scores"]:
-        summary[col] = summary[col] / 100.0
+    if prev_pan_col: final_cols_map["P_Prev_Score"] = format_month_header(prev_pan_col)
+    if curr_pan_col: final_cols_map["P_Curr_Score"] = format_month_header(curr_pan_col)
+    if prev_pan_col and curr_pan_col: final_cols_map["Diff_Pan"] = "Difference in Scores (Pan)"
+    
+    final_cols_map["Total_Students"] = "Total Number of Students"
+    final_cols_map["Total_Courses"] = "Total Number of Courses"
+
+    summary = summary.rename(columns=final_cols_map)[list(final_cols_map.values())]
+
+    # Convert to decimals so Excel natively formats as %
+    pct_cols = [c for c in summary.columns if "Score" in c]
+    for c in pct_cols:
+        summary[c] = summary[c] / 100.0
 
     # ==========================================
     # WRITE TO EXCEL
@@ -294,8 +334,8 @@ def build_monthly_master_report(
     output_path = Path(output_path)
     with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
         
-        # Write summary table starting at Row 21 (Index 20)
-        summary.to_excel(writer, sheet_name="Summary", startrow=20, index=False)
+        # Write the DataFrames (Header=False for Summary so we can write clean custom headers)
+        summary.to_excel(writer, sheet_name="Summary", startrow=8, index=False, header=False)
         merged.to_excel(writer, sheet_name="Courses", index=False)
 
         wb = writer.book
@@ -305,35 +345,47 @@ def build_monthly_master_report(
         # --- Formatting: Summary Sheet ---
         bold_fmt = wb.add_format({'bold': True})
         header_fmt = wb.add_format({'bold': True, 'bottom': 1, 'text_wrap': True, 'align': 'center'})
-        percent_fmt = wb.add_format({'num_format': '0%'})
-        percent_bold_fmt = wb.add_format({'bold': True, 'num_format': '0%'})
         
+        # 1-Decimal Percentage Format (e.g. 85.4%)
+        percent_fmt = wb.add_format({'num_format': '0.0%'})
+        percent_bold_fmt = wb.add_format({'bold': True, 'num_format': '0.0%'})
+        
+        # --- Write Metadata above the table (Rows 0, 1, 2) ---
+        ws_summary.write(0, 0, "College:", bold_fmt)
+        ws_summary.write(0, 1, college_name)
+        ws_summary.write(1, 0, "Term:", bold_fmt)
+        ws_summary.write(1, 1, term_filter if term_filter else "All Terms")
+        ws_summary.write(2, 0, "0 Enrolled Courses Excluded:", bold_fmt)
+        ws_summary.write(2, 1, "Yes" if exclude_zero_enrollment else "No")
+
+        # --- Write Headers (Row 7) ---
+        # Strip the trailing tag we used to prevent duplicate column names in Pandas
+        actual_headers = [c.replace(" (Ally)", "").replace(" (Pan)", "") for c in summary.columns]
+        for col_num, value in enumerate(actual_headers):
+            ws_summary.write(7, col_num, value, header_fmt)
+
+        # Set Column Widths & Apply Number Formats
         ws_summary.set_column(0, 0, 35) # Department
-        ws_summary.set_column(1, 2, 25, percent_fmt) # Scores
-        ws_summary.set_column(3, 4, 22) # Totals
-        ws_summary.set_column(5, 5, 20, percent_fmt) # Difference
-
-        # Apply formatting to headers
-        for col_num, value in enumerate(summary.columns.values):
-            ws_summary.write(20, col_num, value, header_fmt)
-
-        # Bold the Overall row (Row 22)
-        ws_summary.write(21, 0, summary.iloc[0]["Department"], bold_fmt)
-        ws_summary.write_number(21, 1, summary.iloc[0]["Cumulative Ally Score"], percent_bold_fmt)
-        ws_summary.write_number(21, 2, summary.iloc[0]["Cumulative Panorama Score"], percent_bold_fmt)
-        ws_summary.write_number(21, 3, summary.iloc[0]["Total Number of Students"], bold_fmt)
-        ws_summary.write_number(21, 4, summary.iloc[0]["Total Number of Courses"], bold_fmt)
-        ws_summary.write_number(21, 5, summary.iloc[0]["Difference in Scores"], percent_bold_fmt)
-
-        # --- Pre-Row 22 Dashboard Metadata ---
-        ws_summary.write(1, 1, "College:", bold_fmt)
-        ws_summary.write(1, 2, college_name)
         
-        ws_summary.write(2, 1, "Term:", bold_fmt)
-        ws_summary.write(2, 2, term_filter if term_filter else "All Terms")
-        
-        ws_summary.write(3, 1, "0 Enrolled Courses Excluded:", bold_fmt)
-        ws_summary.write(3, 2, "Yes" if exclude_zero_enrollment else "No")
+        col_idx = 1
+        for col_name in summary.columns[1:]:
+            if "Score" in col_name:
+                ws_summary.set_column(col_idx, col_idx, 22, percent_fmt)
+            else:
+                ws_summary.set_column(col_idx, col_idx, 22)
+            col_idx += 1
+
+        # Bold the Overall row (Row 8 in Excel, Index 0 in the df)
+        ws_summary.write(8, 0, summary.iloc[0]["Department"], bold_fmt)
+        col_idx = 1
+        for col_name in summary.columns[1:]:
+            val = summary.iloc[0][col_name]
+            if "Score" in col_name:
+                ws_summary.write_number(8, col_idx, val if pd.notna(val) else 0, percent_bold_fmt)
+            else:
+                ws_summary.write_number(8, col_idx, val if pd.notna(val) else 0, bold_fmt)
+            col_idx += 1
+
 
         # --- Formatting: Courses Sheet ---
         ws_courses.freeze_panes(1, 0)
