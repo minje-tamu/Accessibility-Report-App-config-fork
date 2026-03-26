@@ -115,10 +115,7 @@ def prepare_month_snapshot(
     pan_sheet_override: str | None,
 ) -> pd.DataFrame:
     """
-    Returns a canonical course-level snapshot for the current month with:
-      - course_id (normalized)
-      - Term, Department id/name, Course code/name, Number of students (if present)
-      - Ally score, Panorama Score
+    Returns a canonical course-level snapshot for the current month.
     """
     ally_path = Path(ally_path)
     pan_path = Path(pan_path)
@@ -152,25 +149,10 @@ def prepare_month_snapshot(
     context_cols = [
         c
         for c in [
-            "Term name",
-            "Term Name",
-            "Term",
-            "Dept id",
-            "Dept ID",
-            "Department id",
-            "Department name",
-            "Dept name",
-            "Course code",
-            "Course Code",
-            "Course name",
-            "Course Name",
-            "Number of students",
-            "Number Of Students",
-            "Number of Students",
-            "Enrolled",
-            "Prefix",
-            "Number",
-            "Section",
+            "Term name", "Term Name", "Term", "Dept id", "Dept ID", "Department id",
+            "Department name", "Dept name", "Course code", "Course Code",
+            "Course name", "Course Name", "Number of students", "Number Of Students",
+            "Number of Students", "Enrolled", "Prefix", "Number", "Section",
         ]
         if c in a.columns
     ]
@@ -190,16 +172,8 @@ def prepare_month_snapshot(
         + [
             c
             for c in [
-                "Term Name",
-                "Term",
-                "Course Name",
-                "Course Code",
-                "Department id",
-                "Department name",
-                "Dept id",
-                "Dept name",
-                "Number of students",
-                "Enrolled",
+                "Term Name", "Term", "Course Name", "Course Code", "Department id",
+                "Department name", "Dept id", "Dept name", "Number of students", "Enrolled",
             ]
             if c in p.columns
         ]
@@ -216,30 +190,16 @@ def prepare_month_snapshot(
     coalesce_into(merged, "Department name", "Department name", "Dept name")
     coalesce_into(merged, "Number of students", "Number of students", "Number Of Students", "Number of Students", "Enrolled")
 
-    # Drop duplicates
     for col in [
-        "Term Name",
-        "Term",
-        "Course Name",
-        "Course Code",
-        "Dept id",
-        "Dept ID",
-        "Dept name",
-        "Number Of Students",
-        "Number of Students",
-        "Enrolled",
+        "Term Name", "Term", "Course Name", "Course Code", "Dept id", "Dept ID",
+        "Dept name", "Number Of Students", "Number of Students", "Enrolled",
     ]:
         if col in merged.columns and col not in (
-            "Term name",
-            "Course name",
-            "Course code",
-            "Department id",
-            "Department name",
-            "Number of students",
+            "Term name", "Course name", "Course code",
+            "Department id", "Department name", "Number of students",
         ):
             merged.drop(columns=[col], inplace=True)
 
-    # Optional filters (snapshot-level)
     if dept_ids_filter and "Department id" in merged.columns:
         wanted = {str(x).strip() for x in dept_ids_filter}
         dept_clean = _clean_dept_id_series(merged["Department id"])
@@ -255,15 +215,9 @@ def prepare_month_snapshot(
     raw_cols = [
         c
         for c in (
-            "Term",
-            "Department id",
-            "Department name",
-            "course_id",
-            "Course code",
-            "Course name",
-            "Number of students",
-            "Ally score",
-            "Panorama Score",
+            "Term", "Department id", "Department name", "course_id",
+            "Course code", "Course name", "Number of students",
+            "Ally score", "Panorama Score",
         )
         if c in merged.columns
     ]
@@ -273,8 +227,8 @@ def prepare_month_snapshot(
 # ---------------------- monthly master builder ----------------------
 @dataclass(frozen=True)
 class MonthlyMasterConfig:
-    report_month: str  # "YYYY-MM"
-    reset_year: str | None = None  # if set, drop month columns not matching this year (safety)
+    report_month: str
+    reset_year: str | None = None
 
 
 def build_monthly_master_report(
@@ -290,17 +244,7 @@ def build_monthly_master_report(
     reset_to_year: str | None = None,
     exclude_zero_enrollment: bool = False,
 ) -> None:
-    """
-    Creates/updates a yearly master report by adding two columns for the given report_month:
-      - Ally YYYY-MM
-      - Panorama YYYY-MM
-
-    Additional options:
-      - exclude_zero_enrollment=True drops rows where Number of students == 0 (after merge).
-
-    Output:
-      - Excel file with one sheet: 'Raw Master'
-    """
+    
     report_month = validate_report_month(report_month)
     year = report_month[:4]
     if reset_to_year is not None and reset_to_year != year:
@@ -356,12 +300,8 @@ def build_monthly_master_report(
 
     # 4) Coalesce base metadata
     base_meta = [
-        "Term",
-        "Department id",
-        "Department name",
-        "Course code",
-        "Course name",
-        "Number of students",
+        "Term", "Department id", "Department name",
+        "Course code", "Course name", "Number of students",
     ]
     for col in base_meta:
         newcol = f"{col}_newmeta"
@@ -369,7 +309,7 @@ def build_monthly_master_report(
             merged[col] = merged[col].fillna(merged[newcol])
             merged.drop(columns=[newcol], inplace=True)
 
-    # 4.5) Apply College filter to FINAL output too (needed when LEFT join keeps old rows)
+    # 4.5) Apply College filter to FINAL output
     if dept_ids_filter:
         if "Department id" not in merged.columns:
             raise RuntimeError("College filter requested but 'Department id' is missing in merged output.")
@@ -377,14 +317,13 @@ def build_monthly_master_report(
         dept_clean = _clean_dept_id_series(merged["Department id"])
         merged = merged[dept_clean.isin(wanted)]
 
-    # 4.6) Exclude 0 enrollment rows (final output)
+    # 4.6) Exclude 0 enrollment rows
     if exclude_zero_enrollment:
         if "Number of students" in merged.columns:
             n = _coerce_students(merged["Number of students"])
             merged = merged[~(n == 0)]
-        # If the column is missing, do nothing (safe)
 
-    # 6) Enforce year reset (drop month columns not in this year)
+    # 6) Enforce year reset
     if reset_to_year is not None:
         month_cols = [c for c in merged.columns if c.startswith("Ally ") or c.startswith("Panorama ")]
         for c in month_cols:
@@ -397,36 +336,127 @@ def build_monthly_master_report(
 
     # 7) Order columns
     base_cols = [
-        "course_id",
-        "Term",
-        "Department id",
-        "Department name",
-        "Course code",
-        "Course name",
-        "Number of students",
+        "course_id", "Term", "Department id", "Department name",
+        "Course code", "Course name", "Number of students",
     ]
     month_cols = sorted([c for c in merged.columns if c.startswith("Ally ") or c.startswith("Panorama ")])
     other_cols = [c for c in merged.columns if c not in set(base_cols + month_cols)]
     final_cols = [c for c in base_cols if c in merged.columns] + month_cols + other_cols
     merged = merged[final_cols]
 
-    # 8) Write Excel + formatting
+    # ==========================================
+    # 8) Generate summary sheet
+    # ==========================================
+    
+    # Prep data for aggregation
+    student_counts = _coerce_students(merged["Number of students"]).fillna(0)
+    ally_series = pd.to_numeric(merged[ally_col], errors="coerce")
+    pan_series = pd.to_numeric(merged[pan_col], errors="coerce")
+    
+    summary_df = merged.copy()
+    summary_df["_ally_num"] = ally_series
+    summary_df["_pan_num"] = pan_series
+    summary_df["_students_num"] = student_counts
+    summary_df["Department name"] = summary_df["Department name"].fillna("Unknown")
+    
+    # Group by Department and aggregate
+    summary = summary_df.groupby("Department name").agg(
+        Average_of_Ally=("_ally_num", "mean"),
+        Average_of_Pan=("_pan_num", "mean"),
+        Total_Students=("_students_num", "sum"),
+        Total_Courses=("course_id", "count")
+    ).reset_index()
+    
+    # Rename columns to perfectly match the Dean file layout
+    summary.rename(columns={
+        "Department name": "Department",
+        "Average_of_Ally": "Average of Ally Score",
+        "Average_of_Pan": "Average of Panorama Score",
+        "Total_Students": "Total Number of Students",
+        "Total_Courses": "Total Number of Courses"
+    }, inplace=True)
+    
+    summary["Difference in Scores"] = summary["Average of Panorama Score"] - summary["Average of Ally Score"]
+    
+    # Calculate overall metrics for the Grand Total row
+    overall_ally = summary_df["_ally_num"].mean()
+    overall_pan = summary_df["_pan_num"].mean()
+    overall_students = summary_df["_students_num"].sum()
+    overall_courses = len(summary_df)
+    overall_diff = overall_pan - overall_ally if pd.notnull(overall_pan) and pd.notnull(overall_ally) else pd.NA
+    
+    grand_total_row = pd.DataFrame([{
+        "Department": "Grand Total",
+        "Average of Ally Score": overall_ally,
+        "Average of Panorama Score": overall_pan,
+        "Total Number of Students": overall_students,
+        "Total Number of Courses": overall_courses,
+        "Difference in Scores": overall_diff
+    }])
+    
+    # Append the grand total
+    summary = pd.concat([summary, grand_total_row], ignore_index=True)
+    
+    # Round to 2 decimal places to match the presentation format
+    for col in ["Average of Ally Score", "Average of Panorama Score", "Difference in Scores"]:
+        summary[col] = summary[col].round(2)
+
+
+    # ==========================================
+    # 9) Write to excel
+    # ==========================================
     output_path = Path(output_path)
     with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-        merged.to_excel(writer, sheet_name="Raw Master", index=False)
+        
+        # Write both sheets
+        summary.to_excel(writer, sheet_name="Summary", index=False)
+        merged.to_excel(writer, sheet_name="Courses", index=False)
 
         wb = writer.book
-        ws = writer.sheets["Raw Master"]
+        ws_summary = writer.sheets["Summary"]
+        ws_courses = writer.sheets["Courses"]
 
-        ws.freeze_panes(1, 0)
+        # --- Formatting: Summary Sheet ---
+        # Make the header look clean and bold
+        header_fmt = wb.add_format({'bold': True, 'bottom': 1, 'text_wrap': True, 'align': 'center'})
+        for col_num, value in enumerate(summary.columns.values):
+            ws_summary.write(0, col_num, value, header_fmt)
+            
+        # Set column widths
+        ws_summary.set_column(0, 0, 35) # Department
+        ws_summary.set_column(1, 2, 22) # Averages
+        ws_summary.set_column(3, 4, 22) # Totals
+        ws_summary.set_column(5, 5, 20) # Difference
+        
+        # Float format for scores
+        float_fmt = wb.add_format({'num_format': '0.00'})
+        ws_summary.set_column(1, 2, 22, float_fmt)
+        ws_summary.set_column(5, 5, 20, float_fmt)
+        
+        # Bold the Grand Total Row
+        bold_row_fmt = wb.add_format({'bold': True})
+        bold_float_fmt = wb.add_format({'bold': True, 'num_format': '0.00'})
+        gt_row_idx = len(summary) # Last row of the data (len(df) accounts for header in xlsxwriter)
+        
+        ws_summary.write(gt_row_idx, 0, summary.iloc[-1]["Department"], bold_row_fmt)
+        ws_summary.write_number(gt_row_idx, 1, summary.iloc[-1]["Average of Ally Score"], bold_float_fmt)
+        ws_summary.write_number(gt_row_idx, 2, summary.iloc[-1]["Average of Panorama Score"], bold_float_fmt)
+        ws_summary.write_number(gt_row_idx, 3, summary.iloc[-1]["Total Number of Students"], bold_row_fmt)
+        ws_summary.write_number(gt_row_idx, 4, summary.iloc[-1]["Total Number of Courses"], bold_row_fmt)
+        ws_summary.write_number(gt_row_idx, 5, summary.iloc[-1]["Difference in Scores"], bold_float_fmt)
+
+
+        # --- Formatting: Courses Sheet ---
+        ws_courses.freeze_panes(1, 0)
 
         for i, col in enumerate(merged.columns):
             width = min(max(12, len(str(col)) + 2), 40)
-            ws.set_column(i, i, width)
+            ws_courses.set_column(i, i, width)
 
-        f_red = wb.add_format({"bg_color": "#FFC7CE"})
-        f_orange = wb.add_format({"bg_color": "#F4B084"})
-        f_green = wb.add_format({"bg_color": "#C6EFCE"})
+        # Conditional formatting logic
+        f_red = wb.add_format({"bg_color": "#FFC7CE", "font_color": "#9C0006"})
+        f_orange = wb.add_format({"bg_color": "#FFEB9C", "font_color": "#9C6500"})
+        f_green = wb.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"})
         f_gold = wb.add_format({"bg_color": "#FFD966"})
 
         first_row = 1
@@ -435,18 +465,18 @@ def build_monthly_master_report(
         for i, col in enumerate(merged.columns):
             low = str(col).lower()
             if low.startswith("ally "):
-                ws.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<=", "value": 33, "format": f_red})
-                ws.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 34, "maximum": 66, "format": f_orange})
-                ws.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 67, "format": f_green})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<=", "value": 33, "format": f_red})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 34, "maximum": 66, "format": f_orange})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 67, "format": f_green})
             elif low.startswith("panorama "):
-                ws.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<=", "value": 30, "format": f_red})
-                ws.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 30.01, "maximum": 80, "format": f_gold})
-                ws.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 80.01, "format": f_green})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<=", "value": 30, "format": f_red})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 30.01, "maximum": 80, "format": f_gold})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 80.01, "format": f_green})
 
-    print(f"✅ Wrote monthly master report to {output_path}")
+    print(f"Wrote monthly master report to {output_path}")
 
 
-# ---------------------- CLI ----------------------
+# ---------------------- parse arguments ----------------------
 def parse_args():
     ap = argparse.ArgumentParser(description="Monthly Master Accessibility Report Builder")
     ap.add_argument("--prev-master", default=None, type=Path, help="Previous month master (.xlsx). Omit for first month.")
@@ -481,4 +511,3 @@ if __name__ == "__main__":
         reset_to_year=args.reset_year,
         exclude_zero_enrollment=args.exclude_zero,
     )
-
