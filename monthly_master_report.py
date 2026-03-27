@@ -478,10 +478,11 @@ def build_monthly_master_report(
 
         # --- Conditional Formatting: Courses Sheet ---
         ws_courses.freeze_panes(1, 0)
+        percent_fmt_2_dec = wb.add_format({'num_format': '0.00%'})
         for i, col in enumerate(merged.columns):
             width = min(max(12, len(str(col)) + 2), 40)
             if "net change" in str(col).lower():
-                ws_courses.set_column(i, i, width, percent_fmt)
+                ws_courses.set_column(i, i, width, percent_fmt_2_dec)
             else:
                 ws_courses.set_column(i, i, width)
 
