@@ -248,7 +248,7 @@ def build_monthly_master_report(
     merged = merged[[c for c in base_cols if c in merged.columns] + month_cols + other_cols]
 
     # ==========================================
-    # GENERATE DEAN SUMMARY SHEET (CORRECTED MATH)
+    # GENERATE DEAN SUMMARY SHEET MATH
     # ==========================================
     ally_cols_sorted = sorted([c for c in merged.columns if c.startswith("Ally ")])
     pan_cols_sorted = sorted([c for c in merged.columns if c.startswith("Panorama ")])
@@ -258,6 +258,17 @@ def build_monthly_master_report(
     
     curr_pan_col = pan_cols_sorted[-1] if pan_cols_sorted else None
     prev_pan_col = pan_cols_sorted[-2] if len(pan_cols_sorted) > 1 else None
+
+    # Calculate Net Changes for the Courses tab
+    if curr_ally_col and prev_ally_col:
+        merged["Net Change (Ally)"] = pd.to_numeric(merged[curr_ally_col], errors="coerce") - pd.to_numeric(merged[prev_ally_col], errors="coerce")
+    else:
+        merged["Net Change (Ally)"] = pd.NA
+
+    if curr_pan_col and prev_pan_col:
+        merged["Net Change (Panorama)"] = pd.to_numeric(merged[curr_pan_col], errors="coerce") - pd.to_numeric(merged[prev_pan_col], errors="coerce")
+    else:
+        merged["Net Change (Panorama)"] = pd.NA
 
     student_counts = _coerce_students(merged["Number of students"]).fillna(0)
     summary_df = merged.copy()
@@ -269,7 +280,7 @@ def build_monthly_master_report(
         if c:
             summary_df[f"{c}_num"] = pd.to_numeric(summary_df[c], errors="coerce")
 
-    # Only count a course's students toward the denominator if the course ACTUALLY has a score
+    # Only count a course's students toward the denominator if the course ACTUALLY has a score for that specific metric
     summary_df["_a_curr_valid_students"] = np.where(summary_df[f"{curr_ally_col}_num"].notna(), student_counts, 0) if curr_ally_col else 0
     summary_df["_a_prev_valid_students"] = np.where(summary_df[f"{prev_ally_col}_num"].notna(), student_counts, 0) if prev_ally_col else 0
     summary_df["_p_curr_valid_students"] = np.where(summary_df[f"{curr_pan_col}_num"].notna(), student_counts, 0) if curr_pan_col else 0
@@ -283,8 +294,8 @@ def build_monthly_master_report(
 
     # Group and aggregate
     summary = summary_df.groupby("Department name").agg(
-        Total_Students=("_students_num", "sum"), # Pure meta data sum
-        Total_Courses=("course_id", "count"),    # Pure meta data count
+        Total_Students=("_students_num", "sum"), 
+        Total_Courses=("course_id", "count"),    
         A_Curr_W=("_a_curr_w", "sum"),
         A_Prev_W=("_a_prev_w", "sum"),
         P_Curr_W=("_p_curr_w", "sum"),
@@ -367,7 +378,6 @@ def build_monthly_master_report(
         percent_fmt = wb.add_format({'num_format': '0.0%'})
         percent_bold_fmt = wb.add_format({'bold': True, 'num_format': '0.0%'})
         
-        # Write Metadata (Rows 0, 1, 2)
         ws_summary.write(0, 0, "College:", bold_fmt)
         ws_summary.write(0, 1, college_name)
         ws_summary.write(1, 0, "Term:", bold_fmt)
@@ -375,12 +385,11 @@ def build_monthly_master_report(
         ws_summary.write(2, 0, "0 Enrolled Courses Excluded:", bold_fmt)
         ws_summary.write(2, 1, "Yes" if exclude_zero_enrollment else "No")
 
-        # Write Headers (Row 7)
         actual_headers = [c.replace(" (Ally)", "").replace(" (Pan)", "") for c in summary.columns]
         for col_num, value in enumerate(actual_headers):
             ws_summary.write(7, col_num, value, header_fmt)
 
-        ws_summary.set_column(0, 0, 35) # Department
+        ws_summary.set_column(0, 0, 35) 
         
         col_idx = 1
         for col_name in summary.columns[1:]:
@@ -390,7 +399,6 @@ def build_monthly_master_report(
                 ws_summary.set_column(col_idx, col_idx, 22)
             col_idx += 1
 
-        # Bold the Overall row (Row 8)
         ws_summary.write(8, 0, summary.iloc[0]["Department"], bold_fmt)
         col_idx = 1
         for col_name in summary.columns[1:]:
