@@ -242,13 +242,8 @@ def build_monthly_master_report(
             except Exception: continue
 
     base_cols = ["course_id", "Term", "Department id", "Department name", "Course code", "Course name", "Number of students"]
-    month_cols = sorted([c for c in merged.columns if c.startswith("Ally ") or c.startswith("Panorama ")])
-    other_cols = [c for c in merged.columns if c not in set(base_cols + month_cols)]
-    merged = merged[[c for c in base_cols if c in merged.columns] + month_cols + other_cols]
-
-    # ==========================================
-    # GENERATE DEAN SUMMARY SHEET MATH
-    # ==========================================
+    
+    # Identify score columns
     ally_cols_sorted = sorted([c for c in merged.columns if c.startswith("Ally ")])
     pan_cols_sorted = sorted([c for c in merged.columns if c.startswith("Panorama ")])
 
@@ -259,12 +254,13 @@ def build_monthly_master_report(
     prev_pan_col = pan_cols_sorted[-2] if len(pan_cols_sorted) > 1 else None
 
     # Calculate Net Changes for the Courses tab
+    # We divide by 100 so Excel natives formats them perfectly as %
     if curr_ally_col and prev_ally_col:
         c_a = pd.to_numeric(merged[curr_ally_col], errors="coerce")
         p_a = pd.to_numeric(merged[prev_ally_col], errors="coerce")
         mask_a = c_a.notna() | p_a.notna()
         merged["Net Change (Ally)"] = pd.NA
-        merged.loc[mask_a, "Net Change (Ally)"] = c_a.fillna(0) - p_a.fillna(0)
+        merged.loc[mask_a, "Net Change (Ally)"] = (c_a.fillna(0) - p_a.fillna(0)) / 100.0
     else:
         merged["Net Change (Ally)"] = pd.NA
 
@@ -273,10 +269,30 @@ def build_monthly_master_report(
         p_p = pd.to_numeric(merged[prev_pan_col], errors="coerce")
         mask_p = c_p.notna() | p_p.notna()
         merged["Net Change (Panorama)"] = pd.NA
-        merged.loc[mask_p, "Net Change (Panorama)"] = c_p.fillna(0) - p_p.fillna(0)
+        merged.loc[mask_p, "Net Change (Panorama)"] = (c_p.fillna(0) - p_p.fillna(0)) / 100.0
     else:
         merged["Net Change (Panorama)"] = pd.NA
 
+    base_cols_present = [c for c in base_cols if c in merged.columns]
+    final_merged_cols = base_cols_present[:]
+    
+    final_merged_cols += ally_cols_sorted
+    if "Net Change (Ally)" in merged.columns:
+        final_merged_cols.append("Net Change (Ally)")
+        
+    final_merged_cols += pan_cols_sorted
+    if "Net Change (Panorama)" in merged.columns:
+        final_merged_cols.append("Net Change (Panorama)")
+        
+    processed_set = set(final_merged_cols)
+    other_cols = [c for c in merged.columns if c not in processed_set]
+    final_merged_cols += other_cols
+    
+    merged = merged[final_merged_cols]
+
+    # ==========================================
+    # GENERATE DEAN SUMMARY SHEET MATH
+    # ==========================================
     student_counts = _coerce_students(merged["Number of students"]).fillna(0)
     summary_df = merged.copy()
     summary_df["_students_num"] = student_counts
@@ -314,7 +330,6 @@ def build_monthly_master_report(
     summary["P_Curr_Score"] = np.where(summary["P_Curr_Valid_Students"] > 0, summary["P_Curr_W"] / summary["P_Curr_Valid_Students"], pd.NA)
     summary["P_Prev_Score"] = np.where(summary["P_Prev_Valid_Students"] > 0, summary["P_Prev_W"] / summary["P_Prev_Valid_Students"], pd.NA)
 
-    # Calculate Summary Differences
     a_curr_sum = pd.to_numeric(summary["A_Curr_Score"], errors="coerce")
     a_prev_sum = pd.to_numeric(summary["A_Prev_Score"], errors="coerce")
     mask_a_sum = a_curr_sum.notna() | a_prev_sum.notna()
@@ -346,6 +361,7 @@ def build_monthly_master_report(
         "A_Prev_Score": a_prev_overall,
         "P_Curr_Score": p_curr_overall,
         "P_Prev_Score": p_prev_overall,
+        "Spacer": ""
     }
     
     if pd.notna(a_curr_overall) or pd.notna(a_prev_overall):
@@ -358,23 +374,27 @@ def build_monthly_master_report(
     else:
         overall_row_data["Diff_Pan"] = pd.NA
 
+    summary["Spacer"] = ""
     overall_row = pd.DataFrame([overall_row_data])
     summary = pd.concat([overall_row, summary], ignore_index=True)
 
-    # Build the final column layout dynamically
+    # Build layout dynamically
     final_cols_map = {"Department name": "Department"}
     if prev_ally_col: final_cols_map["A_Prev_Score"] = format_month_header(prev_ally_col)
     if curr_ally_col: final_cols_map["A_Curr_Score"] = format_month_header(curr_ally_col)
-    if prev_ally_col and curr_ally_col: final_cols_map["Diff_Ally"] = "Difference in Scores (Ally)"
+    if prev_ally_col and curr_ally_col: 
+        final_cols_map["Diff_Ally"] = "Net Change (Ally)"
+        final_cols_map["Spacer"] = ""  # The empty divider column
     
     if prev_pan_col: final_cols_map["P_Prev_Score"] = format_month_header(prev_pan_col)
     if curr_pan_col: final_cols_map["P_Curr_Score"] = format_month_header(curr_pan_col)
-    if prev_pan_col and curr_pan_col: final_cols_map["Diff_Pan"] = "Difference in Scores (Pan)"
+    if prev_pan_col and curr_pan_col: 
+        final_cols_map["Diff_Pan"] = "Net Change (Panorama)"
 
     summary = summary.rename(columns=final_cols_map)[list(final_cols_map.values())]
 
-    # Convert to decimals so Excel natively formats as %
-    pct_cols = [c for c in summary.columns if "Score" in c]
+    # Convert to decimals
+    pct_cols = [c for c in summary.columns if "Score" in c or "Net Change" in c]
     for c in pct_cols:
         summary[c] = pd.to_numeric(summary[c], errors="coerce") / 100.0
 
@@ -410,7 +430,7 @@ def build_monthly_master_report(
         ws_summary.write(2, 0, "0 Enrolled Courses Excluded:", bold_fmt)
         ws_summary.write(2, 1, "Yes" if exclude_zero_enrollment else "No")
 
-        actual_headers = [c.replace(" (Ally)", "").replace(" (Pan)", "") for c in summary.columns]
+        actual_headers = list(summary.columns)
         for col_num, value in enumerate(actual_headers):
             ws_summary.write(7, col_num, value, header_fmt)
 
@@ -418,8 +438,10 @@ def build_monthly_master_report(
         
         col_idx = 1
         for col_name in summary.columns[1:]:
-            if "Score" in col_name:
+            if "Score" in col_name or "Net Change" in col_name:
                 ws_summary.set_column(col_idx, col_idx, 22, percent_fmt)
+            elif col_name == "":
+                ws_summary.set_column(col_idx, col_idx, 5) # Narrow width for the empty separator
             else:
                 ws_summary.set_column(col_idx, col_idx, 22)
             col_idx += 1
@@ -428,8 +450,10 @@ def build_monthly_master_report(
         col_idx = 1
         for col_name in summary.columns[1:]:
             val = summary.iloc[0][col_name]
-            if "Score" in col_name:
+            if "Score" in col_name or "Net Change" in col_name:
                 ws_summary.write_number(8, col_idx, val if pd.notna(val) else 0, percent_bold_fmt)
+            elif col_name == "":
+                ws_summary.write_string(8, col_idx, "", bold_fmt)
             else:
                 ws_summary.write_number(8, col_idx, val if pd.notna(val) else 0, bold_fmt)
             col_idx += 1
@@ -440,23 +464,26 @@ def build_monthly_master_report(
 
         for i, col in enumerate(summary.columns):
             low = str(col).lower()
-            if "ally" in low and "difference" not in low:
+            if "ally" in low and "net change" not in low:
                 ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "<=", "value": 0.33, "format": f_red})
                 ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "between", "minimum": 0.330001, "maximum": 0.669999, "format": f_orange})
                 ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": ">=", "value": 0.67, "format": f_green})
-            elif "pan" in low and "difference" not in low:
+            elif "pan" in low and "net change" not in low:
                 ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "<=", "value": 0.30, "format": f_red})
                 ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "between", "minimum": 0.300001, "maximum": 0.800000, "format": f_gold})
                 ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": ">=", "value": 0.800001, "format": f_green})
-            elif "difference" in low:
+            elif "net change" in low:
                 ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "<", "value": 0, "format": f_red})
-                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": ">", "value": 0, "format": f_green})
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": ">=", "value": 0, "format": f_green})
 
         # --- Conditional Formatting: Courses Sheet ---
         ws_courses.freeze_panes(1, 0)
         for i, col in enumerate(merged.columns):
             width = min(max(12, len(str(col)) + 2), 40)
-            ws_courses.set_column(i, i, width)
+            if "net change" in str(col).lower():
+                ws_courses.set_column(i, i, width, percent_fmt)
+            else:
+                ws_courses.set_column(i, i, width)
 
         first_row = 1
         last_row = len(merged)
@@ -473,7 +500,7 @@ def build_monthly_master_report(
                 ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 80.0001, "format": f_green})
             elif "net change" in low:
                 ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<", "value": 0, "format": f_red})
-                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">", "value": 0, "format": f_green})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 0, "format": f_green})
 
     print(f"✅ Wrote monthly master report to {output_path}")
 
