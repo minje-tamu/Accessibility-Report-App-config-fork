@@ -88,7 +88,6 @@ def _coerce_students(series: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce")
 
 def format_month_header(col_name: str) -> str:
-    """Converts 'Ally 2026-02' to 'February Ally Score'"""
     if not col_name:
         return ""
     parts = col_name.split(" ", 1)
@@ -259,14 +258,22 @@ def build_monthly_master_report(
     curr_pan_col = pan_cols_sorted[-1] if pan_cols_sorted else None
     prev_pan_col = pan_cols_sorted[-2] if len(pan_cols_sorted) > 1 else None
 
-    # Calculate Net Changes for the Courses tab
+    # Calculate Net Changes for the Courses tab (Treat missing as 0 IF the other exists)
     if curr_ally_col and prev_ally_col:
-        merged["Net Change (Ally)"] = pd.to_numeric(merged[curr_ally_col], errors="coerce") - pd.to_numeric(merged[prev_ally_col], errors="coerce")
+        c_a = pd.to_numeric(merged[curr_ally_col], errors="coerce")
+        p_a = pd.to_numeric(merged[prev_ally_col], errors="coerce")
+        mask_a = c_a.notna() | p_a.notna()
+        merged["Net Change (Ally)"] = pd.NA
+        merged.loc[mask_a, "Net Change (Ally)"] = c_a.fillna(0) - p_a.fillna(0)
     else:
         merged["Net Change (Ally)"] = pd.NA
 
     if curr_pan_col and prev_pan_col:
-        merged["Net Change (Panorama)"] = pd.to_numeric(merged[curr_pan_col], errors="coerce") - pd.to_numeric(merged[prev_pan_col], errors="coerce")
+        c_p = pd.to_numeric(merged[curr_pan_col], errors="coerce")
+        p_p = pd.to_numeric(merged[prev_pan_col], errors="coerce")
+        mask_p = c_p.notna() | p_p.notna()
+        merged["Net Change (Panorama)"] = pd.NA
+        merged.loc[mask_p, "Net Change (Panorama)"] = c_p.fillna(0) - p_p.fillna(0)
     else:
         merged["Net Change (Panorama)"] = pd.NA
 
@@ -275,24 +282,20 @@ def build_monthly_master_report(
     summary_df["_students_num"] = student_counts
     summary_df["Department name"] = summary_df["Department name"].fillna("Unknown")
     
-    # Extract true numeric values (leave NaN as NaN)
     for c in [curr_ally_col, prev_ally_col, curr_pan_col, prev_pan_col]:
         if c:
             summary_df[f"{c}_num"] = pd.to_numeric(summary_df[c], errors="coerce")
 
-    # Only count a course's students toward the denominator if the course ACTUALLY has a score for that specific metric
     summary_df["_a_curr_valid_students"] = np.where(summary_df[f"{curr_ally_col}_num"].notna(), student_counts, 0) if curr_ally_col else 0
     summary_df["_a_prev_valid_students"] = np.where(summary_df[f"{prev_ally_col}_num"].notna(), student_counts, 0) if prev_ally_col else 0
     summary_df["_p_curr_valid_students"] = np.where(summary_df[f"{curr_pan_col}_num"].notna(), student_counts, 0) if curr_pan_col else 0
     summary_df["_p_prev_valid_students"] = np.where(summary_df[f"{prev_pan_col}_num"].notna(), student_counts, 0) if prev_pan_col else 0
 
-    # Calculate Weights (Score * Valid Students)
     summary_df["_a_curr_w"] = (summary_df[f"{curr_ally_col}_num"].fillna(0) * summary_df["_a_curr_valid_students"]) if curr_ally_col else 0
     summary_df["_a_prev_w"] = (summary_df[f"{prev_ally_col}_num"].fillna(0) * summary_df["_a_prev_valid_students"]) if prev_ally_col else 0
     summary_df["_p_curr_w"] = (summary_df[f"{curr_pan_col}_num"].fillna(0) * summary_df["_p_curr_valid_students"]) if curr_pan_col else 0
     summary_df["_p_prev_w"] = (summary_df[f"{prev_pan_col}_num"].fillna(0) * summary_df["_p_prev_valid_students"]) if prev_pan_col else 0
 
-    # Group and aggregate
     summary = summary_df.groupby("Department name").agg(
         Total_Students=("_students_num", "sum"), 
         Total_Courses=("course_id", "count"),    
@@ -306,40 +309,58 @@ def build_monthly_master_report(
         P_Prev_Valid_Students=("_p_prev_valid_students", "sum")
     ).reset_index()
 
-    # Final Cumulative Calculation (Total Weight / VALID Student Denominator)
     summary["A_Curr_Score"] = np.where(summary["A_Curr_Valid_Students"] > 0, summary["A_Curr_W"] / summary["A_Curr_Valid_Students"], pd.NA)
     summary["A_Prev_Score"] = np.where(summary["A_Prev_Valid_Students"] > 0, summary["A_Prev_W"] / summary["A_Prev_Valid_Students"], pd.NA)
     summary["P_Curr_Score"] = np.where(summary["P_Curr_Valid_Students"] > 0, summary["P_Curr_W"] / summary["P_Curr_Valid_Students"], pd.NA)
     summary["P_Prev_Score"] = np.where(summary["P_Prev_Valid_Students"] > 0, summary["P_Prev_W"] / summary["P_Prev_Valid_Students"], pd.NA)
 
-    # Calculate Differences
-    summary["Diff_Ally"] = summary["A_Curr_Score"] - summary["A_Prev_Score"]
-    summary["Diff_Pan"] = summary["P_Curr_Score"] - summary["P_Prev_Score"]
+    # Calculate Summary Differences (Treat missing as 0 IF the other exists)
+    a_curr_sum = pd.to_numeric(summary["A_Curr_Score"], errors="coerce")
+    a_prev_sum = pd.to_numeric(summary["A_Prev_Score"], errors="coerce")
+    mask_a_sum = a_curr_sum.notna() | a_prev_sum.notna()
+    summary["Diff_Ally"] = pd.NA
+    summary.loc[mask_a_sum, "Diff_Ally"] = a_curr_sum.fillna(0) - a_prev_sum.fillna(0)
 
-    # Calculate Overall Grand Totals (Using the same strict valid student logic)
+    p_curr_sum = pd.to_numeric(summary["P_Curr_Score"], errors="coerce")
+    p_prev_sum = pd.to_numeric(summary["P_Prev_Score"], errors="coerce")
+    mask_p_sum = p_curr_sum.notna() | p_prev_sum.notna()
+    summary["Diff_Pan"] = pd.NA
+    summary.loc[mask_p_sum, "Diff_Pan"] = p_curr_sum.fillna(0) - p_prev_sum.fillna(0)
+
     overall_students = summary_df["_students_num"].sum()
-    
     overall_a_curr_valid = summary_df["_a_curr_valid_students"].sum()
     overall_a_prev_valid = summary_df["_a_prev_valid_students"].sum()
     overall_p_curr_valid = summary_df["_p_curr_valid_students"].sum()
     overall_p_prev_valid = summary_df["_p_prev_valid_students"].sum()
 
+    a_curr_overall = summary_df["_a_curr_w"].sum() / overall_a_curr_valid if overall_a_curr_valid > 0 else pd.NA
+    a_prev_overall = summary_df["_a_prev_w"].sum() / overall_a_prev_valid if overall_a_prev_valid > 0 else pd.NA
+    p_curr_overall = summary_df["_p_curr_w"].sum() / overall_p_curr_valid if overall_p_curr_valid > 0 else pd.NA
+    p_prev_overall = summary_df["_p_prev_w"].sum() / overall_p_prev_valid if overall_p_prev_valid > 0 else pd.NA
+
     overall_row_data = {
         "Department name": "Overall",
         "Total_Students": overall_students,
         "Total_Courses": len(summary_df),
-        "A_Curr_Score": summary_df["_a_curr_w"].sum() / overall_a_curr_valid if overall_a_curr_valid > 0 else pd.NA,
-        "A_Prev_Score": summary_df["_a_prev_w"].sum() / overall_a_prev_valid if overall_a_prev_valid > 0 else pd.NA,
-        "P_Curr_Score": summary_df["_p_curr_w"].sum() / overall_p_curr_valid if overall_p_curr_valid > 0 else pd.NA,
-        "P_Prev_Score": summary_df["_p_prev_w"].sum() / overall_p_prev_valid if overall_p_prev_valid > 0 else pd.NA,
+        "A_Curr_Score": a_curr_overall,
+        "A_Prev_Score": a_prev_overall,
+        "P_Curr_Score": p_curr_overall,
+        "P_Prev_Score": p_prev_overall,
     }
-    overall_row_data["Diff_Ally"] = overall_row_data["A_Curr_Score"] - overall_row_data["A_Prev_Score"] if pd.notna(overall_row_data["A_Curr_Score"]) and pd.notna(overall_row_data["A_Prev_Score"]) else pd.NA
-    overall_row_data["Diff_Pan"] = overall_row_data["P_Curr_Score"] - overall_row_data["P_Prev_Score"] if pd.notna(overall_row_data["P_Curr_Score"]) and pd.notna(overall_row_data["P_Prev_Score"]) else pd.NA
+    
+    if pd.notna(a_curr_overall) or pd.notna(a_prev_overall):
+        overall_row_data["Diff_Ally"] = (a_curr_overall if pd.notna(a_curr_overall) else 0) - (a_prev_overall if pd.notna(a_prev_overall) else 0)
+    else:
+        overall_row_data["Diff_Ally"] = pd.NA
+        
+    if pd.notna(p_curr_overall) or pd.notna(p_prev_overall):
+        overall_row_data["Diff_Pan"] = (p_curr_overall if pd.notna(p_curr_overall) else 0) - (p_prev_overall if pd.notna(p_prev_overall) else 0)
+    else:
+        overall_row_data["Diff_Pan"] = pd.NA
 
     overall_row = pd.DataFrame([overall_row_data])
     summary = pd.concat([overall_row, summary], ignore_index=True)
 
-    # Build the final column layout dynamically
     final_cols_map = {"Department name": "Department"}
     if prev_ally_col: final_cols_map["A_Prev_Score"] = format_month_header(prev_ally_col)
     if curr_ally_col: final_cols_map["A_Curr_Score"] = format_month_header(curr_ally_col)
@@ -357,7 +378,7 @@ def build_monthly_master_report(
     # Convert to decimals so Excel natively formats as %
     pct_cols = [c for c in summary.columns if "Score" in c]
     for c in pct_cols:
-        summary[c] = summary[c] / 100.0
+        summary[c] = pd.to_numeric(summary[c], errors="coerce") / 100.0
 
     # ==========================================
     # WRITE TO EXCEL
@@ -372,12 +393,18 @@ def build_monthly_master_report(
         ws_summary = writer.sheets["Summary"]
         ws_courses = writer.sheets["Courses"]
 
-        # --- Formatting: Summary Sheet ---
+        # Formats
         bold_fmt = wb.add_format({'bold': True})
         header_fmt = wb.add_format({'bold': True, 'bottom': 1, 'text_wrap': True, 'align': 'center'})
         percent_fmt = wb.add_format({'num_format': '0.0%'})
         percent_bold_fmt = wb.add_format({'bold': True, 'num_format': '0.0%'})
         
+        f_red = wb.add_format({"bg_color": "#FFC7CE", "font_color": "#9C0006"})
+        f_orange = wb.add_format({"bg_color": "#FFEB9C", "font_color": "#9C6500"})
+        f_green = wb.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"})
+        f_gold = wb.add_format({"bg_color": "#FFD966"})
+
+        # --- Write Summary Data ---
         ws_summary.write(0, 0, "College:", bold_fmt)
         ws_summary.write(0, 1, college_name)
         ws_summary.write(1, 0, "Term:", bold_fmt)
@@ -409,17 +436,29 @@ def build_monthly_master_report(
                 ws_summary.write_number(8, col_idx, val if pd.notna(val) else 0, bold_fmt)
             col_idx += 1
 
+        # --- Conditional Formatting: Summary Sheet ---
+        summary_first_row = 8
+        summary_last_row = 8 + len(summary) - 1
 
-        # --- Formatting: Courses Sheet ---
+        for i, col in enumerate(summary.columns):
+            low = str(col).lower()
+            if "ally" in low and "difference" not in low:
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "<=", "value": 0.33, "format": f_red})
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "between", "minimum": 0.330001, "maximum": 0.669999, "format": f_orange})
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": ">=", "value": 0.67, "format": f_green})
+            elif "pan" in low and "difference" not in low:
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "<=", "value": 0.30, "format": f_red})
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "between", "minimum": 0.300001, "maximum": 0.800000, "format": f_gold})
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": ">=", "value": 0.800001, "format": f_green})
+            elif "difference" in low:
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": "<", "value": 0, "format": f_red})
+                ws_summary.conditional_format(summary_first_row, i, summary_last_row, i, {"type": "cell", "criteria": ">", "value": 0, "format": f_green})
+
+        # --- Conditional Formatting: Courses Sheet ---
         ws_courses.freeze_panes(1, 0)
         for i, col in enumerate(merged.columns):
             width = min(max(12, len(str(col)) + 2), 40)
             ws_courses.set_column(i, i, width)
-
-        f_red = wb.add_format({"bg_color": "#FFC7CE", "font_color": "#9C0006"})
-        f_orange = wb.add_format({"bg_color": "#FFEB9C", "font_color": "#9C6500"})
-        f_green = wb.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"})
-        f_gold = wb.add_format({"bg_color": "#FFD966"})
 
         first_row = 1
         last_row = len(merged)
@@ -428,14 +467,17 @@ def build_monthly_master_report(
             low = str(col).lower()
             if low.startswith("ally "):
                 ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<=", "value": 33, "format": f_red})
-                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 34, "maximum": 66, "format": f_orange})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 33.0001, "maximum": 66.9999, "format": f_orange})
                 ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 67, "format": f_green})
             elif low.startswith("panorama "):
                 ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<=", "value": 30, "format": f_red})
-                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 30.01, "maximum": 80, "format": f_gold})
-                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 80.01, "format": f_green})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "between", "minimum": 30.0001, "maximum": 80.0000, "format": f_gold})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">=", "value": 80.0001, "format": f_green})
+            elif "net change" in low:
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<", "value": 0, "format": f_red})
+                ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">", "value": 0, "format": f_green})
 
-    print(f"✅ Wrote monthly master report to {output_path}")
+    print(f"Wrote monthly master report to {output_path}")
 
 if __name__ == "__main__":
     args = parse_args()
