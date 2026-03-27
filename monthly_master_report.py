@@ -258,7 +258,7 @@ def build_monthly_master_report(
     curr_pan_col = pan_cols_sorted[-1] if pan_cols_sorted else None
     prev_pan_col = pan_cols_sorted[-2] if len(pan_cols_sorted) > 1 else None
 
-    # Calculate Net Changes for the Courses tab (Treat missing as 0 IF the other exists)
+    # Calculate Net Changes for the Courses tab
     if curr_ally_col and prev_ally_col:
         c_a = pd.to_numeric(merged[curr_ally_col], errors="coerce")
         p_a = pd.to_numeric(merged[prev_ally_col], errors="coerce")
@@ -314,7 +314,7 @@ def build_monthly_master_report(
     summary["P_Curr_Score"] = np.where(summary["P_Curr_Valid_Students"] > 0, summary["P_Curr_W"] / summary["P_Curr_Valid_Students"], pd.NA)
     summary["P_Prev_Score"] = np.where(summary["P_Prev_Valid_Students"] > 0, summary["P_Prev_W"] / summary["P_Prev_Valid_Students"], pd.NA)
 
-    # Calculate Summary Differences (Treat missing as 0 IF the other exists)
+    # Calculate Summary Differences
     a_curr_sum = pd.to_numeric(summary["A_Curr_Score"], errors="coerce")
     a_prev_sum = pd.to_numeric(summary["A_Prev_Score"], errors="coerce")
     mask_a_sum = a_curr_sum.notna() | a_prev_sum.notna()
@@ -361,6 +361,7 @@ def build_monthly_master_report(
     overall_row = pd.DataFrame([overall_row_data])
     summary = pd.concat([overall_row, summary], ignore_index=True)
 
+    # Build the final column layout dynamically
     final_cols_map = {"Department name": "Department"}
     if prev_ally_col: final_cols_map["A_Prev_Score"] = format_month_header(prev_ally_col)
     if curr_ally_col: final_cols_map["A_Curr_Score"] = format_month_header(curr_ally_col)
@@ -369,9 +370,6 @@ def build_monthly_master_report(
     if prev_pan_col: final_cols_map["P_Prev_Score"] = format_month_header(prev_pan_col)
     if curr_pan_col: final_cols_map["P_Curr_Score"] = format_month_header(curr_pan_col)
     if prev_pan_col and curr_pan_col: final_cols_map["Diff_Pan"] = "Difference in Scores (Pan)"
-    
-    final_cols_map["Total_Students"] = "Total Number of Students"
-    final_cols_map["Total_Courses"] = "Total Number of Courses"
 
     summary = summary.rename(columns=final_cols_map)[list(final_cols_map.values())]
 
@@ -477,7 +475,7 @@ def build_monthly_master_report(
                 ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": "<", "value": 0, "format": f_red})
                 ws_courses.conditional_format(first_row, i, last_row, i, {"type": "cell", "criteria": ">", "value": 0, "format": f_green})
 
-    print(f"Wrote monthly master report to {output_path}")
+    print(f"✅ Wrote monthly master report to {output_path}")
 
 if __name__ == "__main__":
     args = parse_args()
