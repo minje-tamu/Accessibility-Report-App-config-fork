@@ -241,6 +241,26 @@ def build_monthly_master_report(
                     merged.drop(columns=[c], inplace=True)
             except Exception: continue
 
+    # ==========================================
+    # DEDUPLICATION LOGIC
+    # ==========================================
+    merged['_orig_index'] = range(len(merged))
+
+    if "Course name" in merged.columns and "course_id" in merged.columns:
+        merged['_numeric_id'] = pd.to_numeric(merged['course_id'], errors='coerce').fillna(-1)
+        merged = merged.sort_values(by=['Course name', '_numeric_id'], ascending=[True, True])
+        
+        mask_valid_name = merged['Course name'].notna() & (merged['Course name'].str.strip() != "")
+        deduped_valid = merged[mask_valid_name].drop_duplicates(subset=['Course name'], keep='last')
+        invalid_names = merged[~mask_valid_name]
+        
+        merged = pd.concat([deduped_valid, invalid_names], ignore_index=True)
+        merged = merged.drop(columns=['_numeric_id'])
+
+    # Restore the exact original row order and clean up
+    merged = merged.sort_values(by='_orig_index').drop(columns=['_orig_index']).reset_index(drop=True)
+
+
     base_cols = ["course_id", "Term", "Department id", "Department name", "Course code", "Course name", "Number of students"]
     
     # Identify score columns
@@ -273,6 +293,7 @@ def build_monthly_master_report(
     else:
         merged["Net Change (Panorama)"] = pd.NA
 
+    # Reorder columns explicitly to insert Net Changes exactly where requested
     base_cols_present = [c for c in base_cols if c in merged.columns]
     final_merged_cols = base_cols_present[:]
     
@@ -378,7 +399,7 @@ def build_monthly_master_report(
     overall_row = pd.DataFrame([overall_row_data])
     summary = pd.concat([overall_row, summary], ignore_index=True)
 
-    # Build layout dynamically
+    # Build layout dynamically to include renamed columns and the Spacer
     final_cols_map = {"Department name": "Department"}
     if prev_ally_col: final_cols_map["A_Prev_Score"] = format_month_header(prev_ally_col)
     if curr_ally_col: final_cols_map["A_Curr_Score"] = format_month_header(curr_ally_col)
@@ -478,10 +499,14 @@ def build_monthly_master_report(
 
         # --- Conditional Formatting: Courses Sheet ---
         ws_courses.freeze_panes(1, 0)
+        
+        # 1. Create a dedicated 2-decimal format for the courses tab
         percent_fmt_2_dec = wb.add_format({'num_format': '0.00%'})
+        
         for i, col in enumerate(merged.columns):
             width = min(max(12, len(str(col)) + 2), 40)
             if "net change" in str(col).lower():
+                # 2. Apply it specifically to the Net Change columns here
                 ws_courses.set_column(i, i, width, percent_fmt_2_dec)
             else:
                 ws_courses.set_column(i, i, width)
