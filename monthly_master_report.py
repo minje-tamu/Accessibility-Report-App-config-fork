@@ -191,9 +191,14 @@ def build_monthly_master_report(
     ally_col = f"Ally {report_month}"
     pan_col = f"Panorama {report_month}"
 
+    # THE FIX: Explicitly target the "Courses" sheet to preserve history
     if prev_master is not None:
         prev_master = Path(prev_master)
-        master_df = pd.read_excel(prev_master, dtype=object)
+        xf = pd.ExcelFile(prev_master)
+        if "Courses" in xf.sheet_names:
+            master_df = pd.read_excel(xf, sheet_name="Courses", dtype=object)
+        else:
+            master_df = pd.read_excel(xf, sheet_name=0, dtype=object)
     else:
         master_df = pd.DataFrame()
 
@@ -244,6 +249,7 @@ def build_monthly_master_report(
     # ==========================================
     # DEDUPLICATION LOGIC
     # ==========================================
+    # Save the original row order so the final sheet isn't scrambled
     merged['_orig_index'] = range(len(merged))
 
     if "Course name" in merged.columns and "course_id" in merged.columns:
@@ -259,7 +265,6 @@ def build_monthly_master_report(
 
     # Restore the exact original row order and clean up
     merged = merged.sort_values(by='_orig_index').drop(columns=['_orig_index']).reset_index(drop=True)
-
 
     base_cols = ["course_id", "Term", "Department id", "Department name", "Course code", "Course name", "Number of students"]
     
