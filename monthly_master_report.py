@@ -252,15 +252,26 @@ def build_monthly_master_report(
     # Save the original row order so the final sheet isn't scrambled
     merged['_orig_index'] = range(len(merged))
 
+    # Define strict criteria for what constitutes a "Phantom" duplicate
+    dedup_subset = [col for col in ['Term', 'Course code', 'Course name'] if col in merged.columns]
+
     if "Course name" in merged.columns and "course_id" in merged.columns:
         merged['_numeric_id'] = pd.to_numeric(merged['course_id'], errors='coerce').fillna(-1)
-        merged = merged.sort_values(by=['Course name', '_numeric_id'], ascending=[True, True])
         
-        mask_valid_name = merged['Course name'].notna() & (merged['Course name'].str.strip() != "")
-        deduped_valid = merged[mask_valid_name].drop_duplicates(subset=['Course name'], keep='last')
-        invalid_names = merged[~mask_valid_name]
+        # Sort by the unique identifiers and then by the numeric ID (so the newest is last)
+        merged = merged.sort_values(by=dedup_subset + ['_numeric_id'], ascending=[True] * len(dedup_subset) + [True])
         
-        merged = pd.concat([deduped_valid, invalid_names], ignore_index=True)
+        # Isolate rows with valid identifiers to prevent accidental deletion of empty cells
+        if "Course code" in merged.columns:
+            mask_valid = merged['Course name'].notna() & merged['Course code'].notna() & (merged['Course name'].str.strip() != "")
+        else:
+            mask_valid = merged['Course name'].notna() & (merged['Course name'].str.strip() != "")
+            
+        # Drop duplicates ONLY if the Term, Course code, AND Course name are all identical
+        deduped_valid = merged[mask_valid].drop_duplicates(subset=dedup_subset, keep='last')
+        invalid_rows = merged[~mask_valid]
+        
+        merged = pd.concat([deduped_valid, invalid_rows], ignore_index=True)
         merged = merged.drop(columns=['_numeric_id'])
 
     # Restore the exact original row order and clean up
